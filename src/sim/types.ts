@@ -70,3 +70,55 @@ export interface AnalyticsSummary {
   runSeconds: number;
   samples: EnergySample[];
 }
+
+/** User-tunable comfort preferences. Persisted to localStorage. */
+export interface ComfortSettings {
+  /** target comfortable temperature in °C (drives the speed bands) */
+  targetTemp: number;
+  /** temperature below which the fan turns off in auto mode */
+  coolThreshold: number;
+  /** RH above which a speed step is added */
+  humidityHigh: number;
+  /** RH below which a speed step is subtracted */
+  humidityLow: number;
+  /** a per-user bias added to the computed speed (-2..+2) */
+  speedBias: number;
+}
+
+/** A captured snapshot of a simulation state, for history. */
+export interface SimulationSnapshot {
+  id: string;
+  label: string;
+  timestamp: number;
+  occupants: Occupant[];
+  sensors: SensorReadings;
+  mode: Mode;
+  decision: Decision;
+  summary: AnalyticsSummary;
+}
+
+/** Result of projecting energy over a time horizon for the same conditions. */
+export interface EnergyProjection {
+  hours: number;
+  aeromindWh: number;
+  manualWh: number;
+  savingsWh: number;
+  savingsPct: number;
+  aeromindKwh: number;
+  manualKwh: number;
+  savingsKwh: number;
+  estCostAeromind: number;
+  estCostManual: number;
+  estCostSavings: number;
+  co2KgSaved: number;
+}
+
+/** A structured report combining live + projected savings. */
+export interface EnergyReportData {
+  generatedAt: number;
+  label: string;
+  live: AnalyticsSummary;
+  projection: EnergyProjection;
+  comfort: ComfortSettings;
+  topInsights: string[];
+}

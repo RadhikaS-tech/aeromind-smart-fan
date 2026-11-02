@@ -1,26 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Wind, Cpu, HelpCircle } from 'lucide-react';
+import { Wind, Cpu, CircleHelp as HelpCircle, SlidersHorizontal, FileText, CirclePlay as PlayCircle, Save } from 'lucide-react';
 import type {
   AnalyticsSummary,
+  ComfortSettings,
+  EnergyReportData,
   EnergySample,
   FanState,
   Mode,
   Occupant,
   SensorReadings,
+  SimulationSnapshot,
 } from '@/sim/types';
-import { decide } from '@/sim/logic';
+import { decide, DEFAULT_COMFORT } from '@/sim/logic';
 import {
   accumulateEnergy,
   aeromindPower,
   manualBaselinePower,
 } from '@/sim/energy';
+import { buildReport } from '@/sim/report';
 import { DEFAULT_OCCUPANTS, SCENARIOS } from '@/sim/scenarios';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
 import RoomView from '@/components/RoomView';
 import ControlPanel from '@/components/ControlPanel';
 import TelemetryStrip from '@/components/TelemetryStrip';
 import AnalyticsPanel from '@/components/AnalyticsPanel';
 import ExplainPanel from '@/components/ExplainPanel';
 import HowItWorks from '@/components/HowItWorks';
+import ComfortSettingsDrawer from '@/components/ComfortSettingsDrawer';
+import EnergyReportDrawer from '@/components/EnergyReportDrawer';
+import GuidedDemoOverlay from '@/components/GuidedDemoOverlay';
+import SimulationHistoryPanel from '@/components/SimulationHistoryPanel';
+import BeforeAfterComparison from '@/components/BeforeAfterComparison';
 
 const TICK_MS = 250; // energy accumulation cadence
 const INITIAL_SENSORS: SensorReadings = { temperature: 27, humidity: 55 };
@@ -31,6 +41,7 @@ const INITIAL_MANUAL: FanState = {
   phase: 0,
   on: true,
 };
+const MAX_HISTORY = 12;
 
 function emptySummary(): AnalyticsSummary {
   return {
@@ -52,16 +63,30 @@ export default function App() {
   const [activeScenario, setActiveScenario] = useState<string | null>(null);
   const [summary, setSummary] = useState<AnalyticsSummary>(emptySummary);
   const [howOpen, setHowOpen] = useState(false);
+  const [comfortOpen, setComfortOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [demoOpen, setDemoOpen] = useState(false);
+  const [reportData, setReportData] = useState<EnergyReportData | null>(null);
+
+  // Persisted state
+  const [comfort, setComfort] = useLocalStorage<ComfortSettings>(
+    'aeromind:comfort',
+    DEFAULT_COMFORT,
+  );
+  const [history, setHistory] = useLocalStorage<SimulationSnapshot[]>(
+    'aeromind:history',
+    [],
+  );
 
   const lastTickRef = useRef<number>(performance.now());
   // Mirror live state into refs so the interval reads fresh values without nesting setters
-  const stateRef = useRef({ occupants, sensors, mode, manualFan });
-  stateRef.current = { occupants, sensors, mode, manualFan };
+  const stateRef = useRef({ occupants, sensors, mode, manualFan, comfort });
+  stateRef.current = { occupants, sensors, mode, manualFan, comfort };
 
   // Compute the decision
   const decision = useMemo(
-    () => decide(mode, sensors, occupants, manualFan),
-    [mode, sensors, occupants, manualFan],
+    () => decide(mode, sensors, occupants, manualFan, comfort),
+    [mode, sensors, occupants, manualFan, comfort],
   );
 
   // Live fan state used by the visualizer
@@ -99,6 +124,17 @@ export default function App() {
     setActiveScenario(id);
   }, []);
 
+  // Used by the guided demo to set up a step's scenario + mode
+  const applyDemoStep = useCallback(
+    (occ: Occupant[], sen: SensorReadings, md: Mode) => {
+      setOccupants(occ.map((o) => ({ ...o })));
+      setSensors(sen);
+      setMode(md);
+      setActiveScenario(null);
+    },
+    [],
+  );
+
   const reset = useCallback(() => {
     setOccupants(DEFAULT_OCCUPANTS.map((o) => ({ ...o })));
     setSensors(INITIAL_SENSORS);
@@ -116,9 +152,9 @@ export default function App() {
       const dt = (now - lastTickRef.current) / 1000;
       lastTickRef.current = now;
 
-      const { occupants: occ, sensors: sen, mode: md, manualFan: mf } = stateRef.current;
+      const { occupants: occ, sensors: sen, mode: md, manualFan: mf, comfort: cf } = stateRef.current;
       const present = occ.some((o) => o.active);
-      const d = decide(md, sen, occ, mf);
+      const d = decide(md, sen, occ, mf, cf);
       const liveOn = md === 'manual' ? mf.speed > 0 : d.fanOn;
       const liveSpeed = md === 'manual' ? mf.speed : d.speed;
       const liveSwing = md === 'manual' ? mf.swing : d.swing;
@@ -163,9 +199,67 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, []);
 
+  // Snapshot management
+  const saveSnapshot = useCallback(() => {
+    const scenarioName = activeScenario
+      ? SCENARIOS.find((s) => s.id === activeScenario)?.name ?? 'Custom'
+      : 'Custom';
+    const snap: SimulationSnapshot = {
+      id: `snap-${Date.now()}`,
+      label: `${scenarioName} · ${mode === 'auto' ? 'Auto' : 'Manual'}`,
+      timestamp: Date.now(),
+      occupants: occupants.map((o) => ({ ...o })),
+      sensors: { ...sensors },
+      mode,
+      decision,
+      summary,
+    };
+    setHistory((prev) => [snap, ...prev].slice(0, MAX_HISTORY));
+  }, [activeScenario, mode, occupants, sensors, decision, summary, setHistory]);
+
+  const restoreSnapshot = useCallback(
+    (snap: SimulationSnapshot) => {
+      setOccupants(snap.occupants.map((o) => ({ ...o })));
+      setSensors({ ...snap.sensors });
+      setMode(snap.mode);
+      setActiveScenario(null);
+    },
+    [],
+  );
+
+  const deleteSnapshot = useCallback(
+    (id: string) => setHistory((prev) => prev.filter((s) => s.id !== id)),
+    [setHistory],
+  );
+
+  const clearHistory = useCallback(() => setHistory([]), [setHistory]);
+
+  // Generate report on demand
+  const generateReport = useCallback(() => {
+    const scenarioName = activeScenario
+      ? SCENARIOS.find((s) => s.id === activeScenario)?.name ?? 'Custom'
+      : 'Custom';
+    const data = buildReport(
+      `${scenarioName} · ${mode === 'auto' ? 'Auto' : 'Manual'}`,
+      summary,
+      decision,
+      sensors,
+      occupants,
+      mode,
+      manualFan,
+      comfort,
+      24,
+    );
+    setReportData(data);
+    setReportOpen(true);
+  }, [activeScenario, mode, summary, decision, sensors, occupants, manualFan, comfort]);
+
   const liveAeroW = liveFan.on ? aeromindPower(liveFan) : 0;
   const present = occupants.some((o) => o.active);
   const liveManualW = manualBaselinePower(present);
+
+  const toolbarBtn =
+    'flex items-center gap-1.5 rounded-lg border border-white/10 bg-ink-900/50 px-2.5 py-1.5 text-[11px] font-semibold text-white/70 transition hover:border-breeze-400/40 hover:text-breeze-300';
 
   return (
     <div className="app-bg min-h-screen text-white">
@@ -188,9 +282,9 @@ export default function App() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             <span
-              className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+              className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold sm:flex ${
                 mode === 'auto'
                   ? 'bg-mint-500/15 text-mint-400'
                   : 'bg-sun-500/15 text-sun-400'
@@ -199,12 +293,24 @@ export default function App() {
               <span className={`h-1.5 w-1.5 rounded-full ${mode === 'auto' ? 'bg-mint-400' : 'bg-sun-400'} animate-pulse-soft`} />
               {mode === 'auto' ? 'AUTO' : 'MANUAL'}
             </span>
+            <button onClick={() => setDemoOpen(true)} className={toolbarBtn} title="Guided live demo">
+              <PlayCircle className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Demo</span>
+            </button>
+            <button onClick={() => setComfortOpen(true)} className={toolbarBtn} title="Comfort settings">
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Comfort</span>
+            </button>
+            <button onClick={generateReport} className={toolbarBtn} title="Energy report">
+              <FileText className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Report</span>
+            </button>
             <button
               onClick={() => setHowOpen(true)}
               className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-ink-900/50 px-2.5 py-1.5 text-[11px] font-semibold text-white/70 transition hover:border-breeze-400/40 hover:text-breeze-300"
             >
               <HelpCircle className="h-3.5 w-3.5" />
-              How it works
+              <span className="hidden sm:inline">How it works</span>
             </button>
           </div>
         </div>
@@ -289,6 +395,35 @@ export default function App() {
               <div className="rounded-2xl border border-white/5 bg-ink-900/30 p-4 shadow-panel">
                 <AnalyticsPanel summary={summary} />
               </div>
+
+              {/* Before / after comparison */}
+              <div className="rounded-2xl border border-white/5 bg-ink-900/30 p-4 shadow-panel">
+                <BeforeAfterComparison
+                  sensors={sensors}
+                  occupants={occupants}
+                  manualFan={manualFan}
+                  comfort={comfort}
+                />
+              </div>
+
+              {/* Simulation history */}
+              <div className="rounded-2xl border border-white/5 bg-ink-900/30 p-4 shadow-panel">
+                <div className="mb-3 flex items-center justify-end">
+                  <button
+                    onClick={saveSnapshot}
+                    className="flex items-center gap-1.5 rounded-lg bg-breeze-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-breeze-300 transition hover:bg-breeze-500/25"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    Save snapshot
+                  </button>
+                </div>
+                <SimulationHistoryPanel
+                  history={history}
+                  onRestore={restoreSnapshot}
+                  onDelete={deleteSnapshot}
+                  onClear={clearHistory}
+                />
+              </div>
             </div>
           </section>
         </div>
@@ -301,6 +436,23 @@ export default function App() {
       </main>
 
       <HowItWorks open={howOpen} onClose={() => setHowOpen(false)} />
+      <ComfortSettingsDrawer
+        open={comfortOpen}
+        onClose={() => setComfortOpen(false)}
+        settings={comfort}
+        onChange={setComfort}
+      />
+      <EnergyReportDrawer
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+        report={reportData}
+      />
+      <GuidedDemoOverlay
+        open={demoOpen}
+        onClose={() => setDemoOpen(false)}
+        comfort={comfort}
+        onApplyScenario={applyDemoStep}
+      />
     </div>
   );
 }

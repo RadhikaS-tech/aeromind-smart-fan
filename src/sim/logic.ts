@@ -1,4 +1,4 @@
-import type { Decision, FanState, Mode, Occupant, SensorReadings } from './types';
+import type { ComfortSettings, Decision, FanState, Mode, Occupant, SensorReadings } from './types';
 import {
   areClose,
   computeZones,
@@ -6,19 +6,30 @@ import {
   occupiedAngularSpan,
 } from './physics';
 
+export const DEFAULT_COMFORT: ComfortSettings = {
+  targetTemp: 24,
+  coolThreshold: 18,
+  humidityHigh: 70,
+  humidityLow: 35,
+  speedBias: 0,
+};
+
 /**
  * Comfort rules — explainable, human-readable heuristics.
  * Returns a target speed 0..5 and a list of human-readable reasons.
  *
- * Baseline: comfortable around 24C & 50% RH.
- *  - Hotter => higher speed. Each degree above 24C adds roughly one step
- *    beyond a neutral base.
- *  - High humidity reduces evaporative cooling, so we add speed when RH>60%
- *    and back off slightly when RH<35% (dry, fan feels cooler).
- *  - Below 21C we ramp down (slight breeze only), and at/below 18C the fan
- *    turns off in auto mode regardless of occupants.
+ * Baseline: comfortable around `settings.targetTemp`°C & ~50% RH.
+ *  - Hotter => higher speed, in bands offset from the target.
+ *  - High humidity reduces evaporative cooling, so we add speed when RH
+ *    exceeds `humidityHigh` and back off below `humidityLow` (dry feels cooler).
+ *  - At/below `coolThreshold` the fan turns off in auto mode regardless of occupants.
+ *  - `speedBias` lets a user who runs warmer/cooler nudge the final speed.
  */
-export function comfortSpeed(sensors: SensorReadings, occupantsPresent: boolean): {
+export function comfortSpeed(
+  sensors: SensorReadings,
+  occupantsPresent: boolean,
+  settings: ComfortSettings = DEFAULT_COMFORT,
+): {
   speed: number;
   reasons: string[];
 } {
@@ -31,35 +42,46 @@ export function comfortSpeed(sensors: SensorReadings, occupantsPresent: boolean)
     return { speed: 0, reasons };
   }
 
-  if (t <= 18) {
-    reasons.push(`Room at ${t}°C is below the cooling threshold (18°C) — fan off.`);
+  if (t <= settings.coolThreshold) {
+    reasons.push(`Room at ${t}°C is below the cooling threshold (${settings.coolThreshold}°C) — fan off.`);
     return { speed: 0, reasons };
   }
 
   let speed = 0;
+  const tgt = settings.targetTemp;
 
-  // Temperature band
-  if (t >= 32) speed = 5;
-  else if (t >= 29) speed = 4;
-  else if (t >= 27) speed = 3;
-  else if (t >= 25) speed = 2;
-  else if (t >= 22) speed = 1;
-  else speed = 1; // 18..22 -> gentle
+  // Temperature band — offsets relative to the comfort target
+  if (t >= tgt + 8) speed = 5;
+  else if (t >= tgt + 5) speed = 4;
+  else if (t >= tgt + 3) speed = 3;
+  else if (t >= tgt + 1) speed = 2;
+  else if (t >= tgt - 2) speed = 1;
+  else speed = 1; // coolThreshold..tgt-2 -> gentle
   reasons.push(
-    `Temperature ${t}°C maps to base speed ${speed} (comfort target ~24°C).`,
+    `Temperature ${t}°C maps to base speed ${speed} (comfort target ~${tgt}°C).`,
   );
 
   // Humidity adjustment
-  if (rh >= 70) {
+  if (rh >= settings.humidityHigh) {
     speed = Math.min(5, speed + 1);
     reasons.push(`High humidity ${rh}% reduces evaporative cooling — +1 step.`);
-  } else if (rh >= 60) {
+  } else if (rh >= settings.humidityHigh - 10) {
     reasons.push(`Humidity ${rh}% is slightly elevated — holding speed.`);
-  } else if (rh <= 35) {
+  } else if (rh <= settings.humidityLow) {
     speed = Math.max(0, speed - 1);
     reasons.push(`Dry air ${rh}% makes airflow feel cooler — −1 step.`);
   } else {
     reasons.push(`Humidity ${rh}% is in the comfortable band.`);
+  }
+
+  // Personal speed bias
+  if (settings.speedBias !== 0) {
+    const before = speed;
+    speed = Math.max(0, Math.min(5, speed + settings.speedBias));
+    const sign = settings.speedBias > 0 ? '+' : '';
+    reasons.push(
+      `Personal preference bias (${sign}${settings.speedBias}) adjusted speed ${before} → ${speed}.`,
+    );
   }
 
   return { speed, reasons };
@@ -102,10 +124,11 @@ export function decide(
   sensors: SensorReadings,
   occupants: Occupant[],
   manualFan: FanState,
+  comfort: ComfortSettings = DEFAULT_COMFORT,
 ): Decision {
   const zones = computeZones(occupants);
   const present = zones.length > 0;
-  const comfort = comfortSpeed(sensors, present);
+  const c = comfortSpeed(sensors, present, comfort);
 
   if (mode === 'manual') {
     return {
@@ -133,20 +156,20 @@ export function decide(
       heading: 0,
       swing: 60,
       reason: [
-        ...comfort.reasons,
+        ...c.reasons,
         'Empty room — AeroMind turns the fan off to save energy.',
       ],
       zones,
     };
   }
-  if (comfort.speed === 0) {
+  if (c.speed === 0) {
     return {
       mode,
       fanOn: false,
       speed: 0,
       heading: 0,
       swing: 60,
-      reason: [...comfort.reasons, 'Comfort conditions are cool enough — fan off in auto mode.'],
+      reason: [...c.reasons, 'Comfort conditions are cool enough — fan off in auto mode.'],
       zones,
     };
   }
@@ -154,10 +177,10 @@ export function decide(
   return {
     mode,
     fanOn: true,
-    speed: comfort.speed,
+    speed: c.speed,
     heading: aim.heading,
     swing: aim.swing,
-    reason: [...comfort.reasons, ...aim.reasons],
+    reason: [...c.reasons, ...aim.reasons],
     zones,
   };
 }
