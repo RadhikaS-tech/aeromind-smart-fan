@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #060a12;
+  color: #eaf2ff;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Ambient page background */
+.app-bg {
+  background:
+    radial-gradient(1100px 620px at 12% -8%, rgba(34, 194, 255, 0.16), transparent 60%),
+    radial-gradient(900px 540px at 100% 0%, rgba(54, 214, 160, 0.1), transparent 55%),
+    radial-gradient(1200px 700px at 50% 120%, rgba(10, 130, 196, 0.12), transparent 60%),
+    #060a12;
+}
+
+/* Subtle grid texture for the floor plan */
+.floor-grid {
+  background-image:
+    linear-gradient(rgba(120, 180, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120, 180, 255, 0.06) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* Custom range slider styling */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  outline: none;
+  cursor: pointer;
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #22c2ff;
+  border: 3px solid #0a1020;
+  box-shadow: 0 0 0 1px rgba(34, 194, 255, 0.6), 0 0 14px rgba(34, 194, 255, 0.5);
+  transition: transform 0.12s ease;
+}
+input[type='range']::-webkit-slider-thumb:hover {
+  transform: scale(1.12);
+}
+input[type='range']::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #22c2ff;
+  border: 3px solid #0a1020;
+  box-shadow: 0 0 0 1px rgba(34, 194, 255, 0.6), 0 0 14px rgba(34, 194, 255, 0.5);
+}
+input[type='range']:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Thin scrollbars for panels */
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Airflow shimmer */
+@keyframes airflowPulse {
+  0% {
+    opacity: 0.15;
+    stroke-dashoffset: 40;
+  }
+  50% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0.15;
+    stroke-dashoffset: 0;
+  }
+}
+.airflow-line {
+  animation: airflowPulse 2.4s ease-in-out infinite;
+}
+
+/* Fan blade rotation handled inline via transform; this is the soft glow */
+.fan-glow {
+  filter: drop-shadow(0 0 10px rgba(34, 194, 255, 0.35));
+}
+
+/* Reduce motion preference */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
